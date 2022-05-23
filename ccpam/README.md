@@ -16,4 +16,4 @@ make
 ```
 make install
 ```
-   command as super-user. It will install the PAM module in the expected directory. It will also create, if absent, a directory (**/etc/CC**) for storing the users' public keys.
+   as super-user. It will install the PAM module in the expected directory. It will also create, if absent, a directory (**/etc/CC**) for storing the users' public keys.
