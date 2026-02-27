@@ -37,11 +37,26 @@
 
 #include <opencryptoki/apiclient.h>
 #include <openssl/x509.h>
+#include <openssl/evp.h>
+#include <openssl/param_build.h>
 #include "eidlib.h"
 
 #include "CCkpubFile.h"
 
 static char * command;
+
+static void
+SHA1( unsigned char * data, unsigned int data_len, unsigned char * digest )
+{
+    EVP_MD_CTX * ctx;
+    unsigned int len = 20;
+
+    ctx = EVP_MD_CTX_new();
+    EVP_DigestInit( ctx, EVP_sha1() );
+    EVP_DigestUpdate ( ctx, data, data_len );
+    EVP_DigestFinal ( ctx, digest, &len );
+    EVP_MD_CTX_free( ctx );
+}
 
 /*
 * Generic function that finds a PKCS#11 object, given its class and
@@ -112,7 +127,7 @@ CC_findObject ( CK_SESSION_HANDLE sessH, CK_ULONG objClass, const char * label,
 */
 
 static int
-CC_checkCard ( pam_handle_t * pamh, RSA * pubKey )
+CC_checkCard ( pam_handle_t * pamh, EVP_PKEY * pubKey )
 {
     int fd;
     int i;
@@ -126,10 +141,10 @@ CC_checkCard ( pam_handle_t * pamh, RSA * pubKey )
     CK_MECHANISM mechanism;
     CK_ULONG signatureLen;
     CK_BYTE * signature;
-    SHA_CTX ctx;
     unsigned char challenge[64];
     unsigned char digest[20];
     char * PIN;
+    EVP_PKEY_CTX * ctx;
 
     ret = C_Initialize ( 0 );
     if (ret != CKR_OK) {
@@ -258,11 +273,16 @@ sign:
     * Decrypt result with public key
     */
 
-    SHA1_Init ( &ctx );
-    SHA1_Update ( &ctx, challenge, sizeof(challenge) );
-    SHA1_Final ( digest, &ctx );
+    SHA1 ( challenge, (unsigned int) sizeof(challenge), digest );
 
-    if (RSA_verify ( NID_sha1, digest, sizeof(digest), signature, signatureLen, pubKey ) == 1) {
+
+    // if (RSA_verify ( NID_sha1, digest, sizeof(digest), signature, signatureLen, pubKey ) == 1) {
+    ctx = EVP_PKEY_CTX_new( pubKey, 0 );
+    EVP_PKEY_verify_init( ctx );
+    EVP_PKEY_CTX_set_rsa_padding( ctx, RSA_PKCS1_PADDING );
+    EVP_PKEY_CTX_set_signature_md( ctx, EVP_sha1() );
+
+    if (EVP_PKEY_verify( ctx, signature, signatureLen, digest, sizeof(digest) ) == 1) {
 	D(("PTEID CC authentication: success!"));
 	return CKR_OK;
     }
@@ -286,12 +306,25 @@ CC_login ( pam_handle_t * pamh, struct passwd * pwd,
         if (strcmp ( pubKeys[i].username, pwd->pw_name ) == 0) {
 	    BIGNUM * n = 0;
 	    BIGNUM * e = 0;
-	    RSA * key = RSA_new ();
+	    // RSA * key = RSA_new ();
+            EVP_PKEY * key;
+            EVP_PKEY_CTX * ctx = EVP_PKEY_CTX_new_from_name( 0, "RSA", 0 );
+            OSSL_PARAM_BLD * bld = OSSL_PARAM_BLD_new();
+            OSSL_PARAM * params;
 
 	    BN_hex2bn ( &e, pubKeys[i].e );
 	    BN_hex2bn ( &n, pubKeys[i].n );
 
-	    RSA_set0_key ( key, n, e, 0 );
+            EVP_PKEY_fromdata_init( ctx );
+            OSSL_PARAM_BLD_push_BN(bld, "n", n );
+            OSSL_PARAM_BLD_push_BN(bld, "e", e );
+            params = OSSL_PARAM_BLD_to_param( bld );
+            OSSL_PARAM_BLD_free( bld );
+
+            EVP_PKEY_fromdata( ctx, &key, EVP_PKEY_PUBLIC_KEY, params );
+            OSSL_PARAM_free( params );
+
+	    // RSA_set0_key ( key, n, e, 0 );
 
 	    D(("Found public key for user %s", pwd->pw_name));
 

@@ -109,6 +109,8 @@ loadCCPubKey ()
 
 	return rsaKey;
     }
+
+    return 0;
 }
 
 int
